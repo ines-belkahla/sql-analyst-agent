@@ -1,0 +1,33 @@
+schema: '2.0'
+stages:
+  download:
+    cmd: python -m src.download_data
+    deps:
+    - path: src/download_data.py
+      hash: md5
+      md5: 1bffc65162b8f7c0a370498f78e1dacb
+      size: 4363
+    outs:
+    - path: data/bird
+      hash: md5
+      md5: 4123a5f358dc72e30063195daf08d2c3.dir
+      size: 1493695188
+      nfiles: 13
+  ingest:
+    cmd: python -m src.ingest
+    deps:
+    - path: data/bird
+      hash: md5
+      md5: fdf580277e895979b2798db09295caec.dir
+      size: 1493727956
+      nfiles: 15
+    - path: src/ingest.py
+      hash: md5
+      md5: baa3ca5fe61c34235b33a0e1061993f1
+      size: 2789
+    outs:
+    - path: data/vectorstore
+      hash: md5
+      md5: 17ff97f7b032e9a3eb36be6463ea7c6e.dir
+      size: 206976
+      nfiles: 2
