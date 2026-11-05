@@ -1,0 +1,32 @@
+# DVC pipeline: dvc repro runs only the steps whose inputs changed.
+# Outputs (outs) are stored on DagsHub with "dvc push" and fetched with "dvc pull".
+stages:
+  download:
+    cmd: python -m src.download_data
+    deps:
+      - src/download_data.py
+    outs:
+      - data/bird
+
+  ingest:
+    cmd: python -m src.ingest
+    deps:
+      - src/ingest.py
+      - data/bird
+    outs:
+      - data/vectorstore
+
+  evaluate:
+    cmd: python evaluate.py
+    deps:
+      - evaluate.py
+      - src/agent.py
+      - src/retriever.py
+      - src/sql_tools.py
+      - mcp_server.py
+      - data/vectorstore
+    outs:
+      - results/eval_details.csv
+    metrics:
+      - results/metrics.json:
+          cache: false

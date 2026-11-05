@@ -1,0 +1,32 @@
+# core
+python-dotenv
+pandas
+gdown                         # downloads the dataset from Google Drive
+
+# langchain / langgraph
+langchain
+langchain-core
+langchain-community==0.4.1    # pinned: ragas does not work with newer versions yet
+langchain-groq
+langgraph
+
+# RAG / vector store
+faiss-cpu                     # vector store (saved as plain files, works with DVC)
+langchain-huggingface
+sentence-transformers
+
+# SQL safety
+sqlglot
+
+# MCP (tool calling)
+mcp<2                         # langchain-mcp-adapters needs MCP 1.x
+langchain-mcp-adapters
+
+# web interface
+streamlit
+
+# evaluation
+ragas
+
+# data versioning
+dvc
