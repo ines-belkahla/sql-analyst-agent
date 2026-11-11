@@ -1,188 +1,419 @@
-# SQL Analyst Agent
+# Conversational SQL Analyst
 
-Ask a question about a database in plain English. The agent finds the relevant tables (RAG),
-writes SQL, checks that it is safe, runs it read-only, fixes its own errors, and answers with
-a table, a chart, the SQL and its sources. It remembers the conversation, so follow-up
-questions like "and for 2012?" work.
+A manager asks a business question in plain language. The system retrieves relevant database
+documentation (RAG), generates and validates SQL, executes it read-only, repairs errors, and
+returns a result table, chart, explanation and citations.
 
-Team: Ouissem Oueslati, Sarra Bettaieb, Ines Belkahla.
-Data: [BIRD Mini-Dev](https://github.com/bird-bench/mini_dev), 500 questions over 11 SQLite databases.
+**Dataset:** BIRD Mini-Dev. Check and retain the dataset's licence and attribution in the final report.
+**Architecture:** Person A (data/RAG) + Person B (LangGraph/MCP agent) + Person C (React application).
 
-## What covers each required feature
 
-| Required feature | Where |
-| --- | --- |
-| Document management: RAG, metadata, citation | `src/ingest.py` builds one document per table with metadata (`db_id`, `table`, `source`); `src/retriever.py` searches it, filtered by database; answers cite the `source` files |
-| Tool calling / MCP | `mcp_server.py` exposes `explain_schema` and `run_sql`; the agent calls them |
-| Framework (LangChain / LangGraph) | `src/agent.py`: LangChain `create_agent` (a LangGraph graph) with memory |
-| Benchmarking (retrieval and generation) | `evaluate.py`: Recall@k, MRR, execution accuracy, and RAGAS |
-| Web interface | `app.py` (Streamlit) |
-| Data versioning | DVC pipeline in `dvc.yaml`, data stored on DagsHub |
+| Workstream | Included here | Owner |
+|---|---|---|
+| Data ingestion, cleaning, schema metadata, glossary documents | pipeline code and tests | A |
+| Embeddings, ChromaDB index, routing, retrieval, schema context and citations | implementation and tests | A |
+| Retrieval benchmark | evaluation pipeline | A |
+| Read-only database/schema/quality API routes | `data_engineering/api/routes_data.py` | A |
+| LangGraph, LangChain, MCP, SQL generation/execution, chat API | documented interfaces; implementation left open | B |
+| React frontend, visualizations, deployment | documented interfaces; implementation left open | C |
 
-## Project structure
+Start with `docs/PERSON_A_GUIDE.md`, then read `docs/ARCHITECTURE.md` and
+`docs/CONTRACTS.md`. `docs/TEAM_PLAN.md` defines all three workstreams.
 
+## Repository layout
+
+The source tree is separated by engineering responsibility. There is no generic `backend/` folder.
+
+```text
+data_engineering/             PERSON A — data and RAG implementation
+  config.py                   paths, parameters and dataset discovery
+  schema_store.py             cleaned schema access
+  ingestion/                  source connectors and ingestion adapters
+  processing/                 BIRD cleaning and document generation
+  retrieval/                  embeddings, ChromaDB, routing and citations
+  api/                        read-only schema and data-quality routes
+agent/                        PERSON B — LangGraph, LangChain and MCP
+  graph/                      LangGraph workflow [B]
+  tools/                      LangChain tools and SQL safety [B]
+  mcp/                        MCP server and adapters [B]
+  api/                        FastAPI chat/session API [B]
+frontend/                     PERSON C — React + TypeScript application
+deploy/                       PERSON C — Docker Compose and deployment
+data/                         datasets and generated data artifacts
+  raw/                        BIRD data, tracked by DVC (not in this ZIP)
+  processed/                  cleaned schema, documents and quality report
+  index/                      ChromaDB index
+  glossary/                    human-authored business definitions
+evaluation/                   BENCHMARKING — separate from runtime code
+  datasets/                   deterministic benchmark-set construction
+  data/                       evaluation questions
+  retrieval/                  Person A retrieval metrics
+  generation/                 Person B generation metrics
+  results/                    generated benchmark outputs
+docs/                         architecture, contracts, plans and handoff guides
+dvc.yaml                      reproducible data + retrieval pipeline
+params.yaml                   pipeline and retrieval parameters
 ```
-sql-analyst-agent/
-├── app.py               web interface (Streamlit)
-├── mcp_server.py        MCP tools: explain_schema, run_sql
-├── evaluate.py          benchmark: retrieval + generation metrics
-├── dvc.yaml             pipeline: download -> ingest -> evaluate
-├── requirements.txt
-├── .env.example         copy to .env and add your Groq key
-└── src/
-    ├── config.py        paths, model names, limits
-    ├── download_data.py step 1: download + clean the dataset  -> data/bird/
-    ├── ingest.py        step 2: tables -> documents -> FAISS  -> data/vectorstore/
-    ├── retriever.py     search the relevant tables for a question
-    ├── sql_tools.py     SQL safety check + read-only execution
-    └── agent.py         the agent (Groq LLM + MCP tools + memory)
+
+## 0. Prerequisites
+
+On Windows, install:
+- Python 3.11 (recommended for a predictable environment)
+- Git
+- Node.js LTS (Person C)
+- A DagsHub account and a DagsHub repository connected to the team's GitHub repository
+
+Use one shared GitHub repository and invite the other two teammates as collaborators.
+Create the repository before pushing. Do not put dataset files, model weights, API keys or
+DagsHub tokens in Git.
+
+## Docker setup (recommended for the team)
+
+Docker Desktop is already installed? Make sure it is running, then use the commands below
+from the project root. The shared development container uses Python 3.11 and the same
+`requirements.txt` for all teammates. The project folder is bind-mounted, so edits made in VS
+Code on Windows appear immediately inside the container. The Hugging Face model cache is kept
+in a named Docker volume. DVC configuration and credentials remain in your local project
+folder; they are not baked into the image.
+
+Build and start the development container:
+
+```powershell
+docker compose config
+docker compose build
+docker compose up -d
+docker compose ps
 ```
 
-How a question flows: `app.py` → `agent.py` → (MCP) `explain_schema` → LLM writes SQL →
-(MCP) `run_sql` → error? the LLM fixes it and retries → answer + SQL + sources.
+Open a shell inside it:
 
----
+```powershell
+docker compose exec dev bash
+```
 
-## 1. Setup (everyone, once)
+Or run commands directly without opening a shell:
 
-In Git Bash, with Python 3.11:
+```powershell
+docker compose exec dev python -m pytest -q
+docker compose exec dev dvc remote list
+docker compose exec dev dvc pull
+docker compose exec dev dvc repro
+```
 
-```bash
-git clone https://github.com/<OWNER>/sql-analyst-agent.git
-cd sql-analyst-agent
+After editing `requirements.txt` or `Dockerfile`, rebuild the image:
+
+```powershell
+docker compose build --no-cache
+docker compose up -d
+```
+
+Stop the container but keep the model cache:
+
+```powershell
+docker compose down
+```
+
+To also delete the named model-cache volume (normally unnecessary):
+
+```powershell
+docker compose down -v
+```
+
+**Important:** do not run `docker compose down -v` unless you intentionally want to delete the
+local Hugging Face cache. Your source code and DVC data are bind-mounted from the project
+folder and are not stored in that named volume.
+
+For a future integrated deployment, Person B and C can add separate agent/API and frontend
+services to `compose.yaml`. Do not create a separate container for every source folder;
+containers should represent independently running services.
+
+## 1. Put this project in your Git repository
+
+Copy the ZIP contents into the team's Git repository folder. Open PowerShell in the project
+root (the folder containing `README.md`).
+
+**If the GitHub repository is brand new and has no `main` branch yet**, make the first commit
+directly on `main`:
+
+```powershell
+git status
+git branch -M main
+git add .
+git commit -m "Add Person A data and retrieval foundation"
+git push -u origin main
+```
+
+**If `main` already exists**, create a feature branch and open a Pull Request:
+
+```powershell
+git checkout main
+git pull origin main
+git checkout -b setup/person-a
+git add .
+git commit -m "Add Person A data and retrieval foundation"
+git push -u origin setup/person-a
+```
+
+If you have not cloned the GitHub repository yet:
+
+```powershell
+git clone https://github.com/<github-username>/<repository-name>.git
+cd <repository-name>
+# Copy/extract the ZIP contents into this folder, then follow the matching commands above.
+```
+
+Do not overwrite an existing `.git` folder when extracting the ZIP.
+
+## 2. Create and activate the Python environment
+
+Run from the project root:
+
+```powershell
 py -3.11 -m venv .venv
-source .venv/Scripts/activate        # do this in every new terminal
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 pip install -r requirements.txt
-cp .env.example .env
+pip install -e .
 ```
 
-Open `.env` and paste your Groq API key (free, from https://console.groq.com/keys).
+If PowerShell blocks environment activation, run this once in the current terminal:
 
-## 2. Data with DVC
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
+```
 
-**Why DVC:** one person downloads, cleans and indexes the data once, then pushes the result to
-DagsHub. Everyone else gets the same files with `dvc pull`, without redoing the work. Git
-stores the code and a small file (`dvc.lock`) that says which version of the data goes with it.
+### Replacing an existing GitHub project while preserving its DVC remote
 
-The pipeline (`dvc.yaml`) has three steps. `dvc repro` only reruns a step when its code or
-input changed:
+If this project is replacing an older repository, clone/use the existing repository folder and
+make a backup before copying these files. Do not copy the ZIP's `.git` or `.dvc` directories
+over your existing ones. Keep the existing `.git` history and `.dvc/config` /
+`.dvc/config.local`. Pull any old DVC-tracked dataset you still need before replacing the old
+working tree. Then copy the new project files into the repository root, preserving `.git` and
+`.dvc`, review `git status`, and commit the replacement. The new `dvc.yaml` pipeline may have
+different stages from the old project, so check the DVC stages and migrate/re-track the dataset
+under the new `data/raw/` location as described below.
 
-| Step | What it does | Output |
-| --- | --- | --- |
-| `download` | downloads BIRD Mini-Dev, cleans the description files (encodings, spaces), keeps the 11 databases and 500 questions | `data/bird/` |
-| `ingest` | builds one document per table and stores the embeddings in FAISS | `data/vectorstore/` |
-| `evaluate` | runs the benchmark (uses the Groq API) | `results/` |
+## 3. Configure DVC with DagsHub
 
-### 2.1 First time: Ines sets it up and pushes the data
+Create a DagsHub repository connected to the team's GitHub repository. In DagsHub, open the
+repository and copy its DVC remote URL. It normally looks like:
 
-1. Push the code to a new GitHub repository (private or public, without README).
-2. Create a DagsHub account at https://dagshub.com (sign in with GitHub), then
-   **Create → Connect a repository → GitHub** and pick `sql-analyst-agent`.
-3. In the project folder (venv active):
+`https://dagshub.com/<dagshub-username>/<repository-name>.dvc`
 
-```bash
+Add the remote (replace placeholders with the real values):
+
+```powershell
 dvc init
-dvc remote add -d origin https://dagshub.com/<DAGSHUB_USER>/sql-analyst-agent.dvc
-dvc remote modify origin --local auth basic
-dvc remote modify origin --local user <DAGSHUB_USER>
-dvc remote modify origin --local password <DAGSHUB_TOKEN>
-
-dvc repro ingest          # downloads + cleans the data, then builds the index
-
-git add .
-git commit -m "Add DVC pipeline and data"
+dvc remote add -d origin https://dagshub.com/<dagshub-username>/<repository-name>.dvc
+git add .dvc/config
+git commit -m "Configure DVC remote"
 git push
-dvc push                  # uploads data/bird and data/vectorstore to DagsHub
 ```
 
-`<DAGSHUB_TOKEN>` is in DagsHub → your profile → **Settings → Tokens**. The `--local`
-settings stay on your laptop (never in Git), so each person uses their own token.
+Configure your own credentials locally. Get a DagsHub access token from your DagsHub account
+settings; do not paste it into a tracked file.
 
-4. On DagsHub, open the repository → **Settings → Collaborators** and add Ouissem and Sarra.
-
-If the Google Drive download fails ("too many users"), download the zip from the
-[mini_dev page](https://github.com/bird-bench/mini_dev), save it as `data/minidev.zip`
-and run `dvc repro ingest` again.
-
-### 2.2 Ouissem and Sarra: get the data
-
-After the setup of section 1:
-
-```bash
+```powershell
 dvc remote modify origin --local auth basic
-dvc remote modify origin --local user <YOUR_DAGSHUB_USER>
-dvc remote modify origin --local password <YOUR_DAGSHUB_TOKEN>
-dvc pull
+dvc remote modify origin --local user <dagshub-username>
+dvc remote modify origin --local password <dagshub-access-token>
 ```
 
-That's it: `data/bird/` and `data/vectorstore/` are now on your laptop.
+The `--local` settings are stored in `.dvc/config.local` and must never be committed.
+Each teammate configures their own credentials on their own machine.
 
-### 2.3 Every time someone changes a step
+If `dvc init` reports that DVC is already initialized, do not initialize it again. Check
+`.dvc/config` and continue with the remote setup.
 
-The person who changed the code:
+## 4. Download and track BIRD Mini-Dev
 
-```bash
-dvc repro                 # reruns only what changed
-git add .
-git commit -m "Describe the change"
+Download the **BIRD Mini-Dev Complete Package** from the official BIRD dataset page:
+https://bird-bench.github.io/
+
+Extract its contents under `data/raw/`. The directory can contain a wrapper folder, but the
+pipeline must be able to find both:
+- `dev_databases/` with each `<database>/<database>.sqlite` file and optional
+  `database_description/*.csv` files
+- `mini_dev_sqlite.json`
+
+Check that the project can discover the files:
+
+```powershell
+python -c "from data_engineering import config; print(config.dev_databases_dir()); print(config.questions_file()); print(config.list_db_ids())"
+```
+
+Track the raw data with DVC:
+
+```powershell
+dvc add data/raw
+git add data/raw.dvc data/.gitignore
+git commit -m "Track BIRD Mini-Dev with DVC"
 git push
 dvc push
 ```
 
-Everyone else:
+The raw dataset is deliberately **not included in this ZIP**. This avoids shipping a large
+dataset copy and keeps Git lightweight. DVC stores the dataset artifacts.
 
-```bash
+## 5. Run Person A's pipeline
+
+First run the unit tests. The tests use a small synthetic BIRD-like fixture and a fake embedder,
+so they do not need the full dataset or a model download:
+
+```powershell
+python -m pytest -q
+```
+
+Then run the complete DVC pipeline:
+
+```powershell
+dvc repro
+```
+
+Stages:
+1. `build_eval_set`: select a deterministic, stratified evaluation sample.
+2. `clean`: create `schema.json`, `documents.jsonl` and `cleaning_report.json`.
+3. `index`: embed documents and build the persistent ChromaDB index.
+4. `eval_retrieval`: compute retrieval metrics and detailed results.
+
+The first index build downloads the configured embedding model (`BAAI/bge-small-en-v1.5`).
+Allow time and disk space for this download.
+
+Useful commands:
+
+```powershell
+dvc repro clean
+dvc repro index
+dvc repro eval_retrieval
+dvc status
+dvc metrics show
+```
+
+Inspect:
+- `data/processed/schema.json`
+- `data/processed/documents.jsonl`
+- `data/processed/cleaning_report.json`
+- `evaluation/results/retrieval_metrics.json`
+- `evaluation/results/retrieval_details.csv`
+
+After successful reproduction, publish the DVC artifacts and commit the reproducibility files:
+
+```powershell
+dvc push
+git add dvc.lock evaluation/data/eval_set.jsonl evaluation/results/retrieval_metrics.json
+git commit -m "Add reproducible cleaned data and retrieval benchmark"
+git push
+```
+
+Note: `data/processed` and `data/index` are declared as pipeline outputs in `dvc.yaml`.
+DVC records their versions in `dvc.lock` and uploads their cache with `dvc push`; they do not
+need separate `dvc add` commands or standalone `.dvc` pointer files.
+
+## 6. Verify Person A's retrieval API
+
+```powershell
+python -c "from data_engineering.retrieval.context import build_schema_context; c=build_schema_context('Which drivers scored the most points?'); print(c.db_id); print(c.tables); print(c.citations[:3])"
+```
+
+The main interface for Person B is:
+
+```python
+from data_engineering.retrieval.context import build_schema_context
+
+context = build_schema_context(
+    question="Which drivers scored the most points?",
+    db_id=None,  # None means automatic database routing
+)
+print(context.db_id)
+print(context.text)
+print(context.citations)
+```
+
+Person A's data router can be mounted by Person B:
+
+```python
+from data_engineering.api.routes_data import router as data_router
+app.include_router(data_router, prefix="/api")
+```
+
+It provides:
+- `GET /api/databases`
+- `GET /api/databases/{db_id}/schema`
+- `GET /api/quality-report`
+
+Person B owns `/api/health`, `/api/chat`, sessions, streaming and the agent.
+
+## 7. Git and DVC workflow for all three people
+
+Each person should work on a feature branch and avoid editing another person's folders without
+coordination.
+
+```powershell
+git checkout main
 git pull
 dvc pull
+git checkout -b <person>/<feature>
+# Make changes in your owned folders
+python -m pytest -q
+git status
+git add <changed-files>
+git commit -m "Describe the change"
+git push -u origin <person>/<feature>
 ```
 
-## 3. Run the app
+Open a PR into `main`. For changes to DVC-tracked artifacts:
 
-```bash
-streamlit run app.py
+```powershell
+dvc repro
+dvc push
+git add dvc.lock <relevant-metrics-or-eval-files>
+git commit -m "Update data pipeline artifacts"
+git push
 ```
 
-Pick a database in the sidebar and ask a question, for example on `formula_1`:
-"Which 5 drivers scored the most points in 2013?", then "and for 2012?".
+For teammates B and C, the first-time setup after cloning is:
 
-## 4. Evaluate
-
-```bash
-dvc repro evaluate        # or: python evaluate.py --n 20
-dvc metrics show          # prints results/metrics.json
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+pip install -e .
+# Configure your own DagsHub credentials as in section 3
+dvc pull
+python -m pytest -q
 ```
 
-It samples 20 questions (30 % simple, 50 % moderate, 20 % challenging) and measures:
+Person C also installs the frontend dependencies from `frontend/` once that workstream creates
+its `package.json`:
 
-| Part | Metric | Meaning |
-| --- | --- | --- |
-| Retrieval | Recall@5 | share of the tables needed by the reference SQL that are in the top 5 |
-| Retrieval | MRR | 1 / rank of the first needed table |
-| Retrieval | RAGAS context recall | can the reference SQL be built from the retrieved schema? |
-| Generation | Execution accuracy | the agent's SQL returns the same rows as the reference SQL (BIRD's metric) |
-| Generation | RAGAS SQL equivalence | the LLM judge says both SQL queries are equivalent |
-| Generation | RAGAS faithfulness | the answer is supported by the schema and the query result |
+```powershell
+cd frontend
+npm install
+npm run dev
+```
 
-Results: `results/metrics.json` (summary, also by difficulty) and `results/eval_details.csv`
-(one row per question). For reference, the BIRD authors report 24.4 % execution accuracy
-for an 8B model and 45.8 % for gpt-4-turbo on this dataset.
+## 8. Troubleshooting
 
-## 5. Team roles
+| Problem | What to check |
+|---|---|
+| `dev_databases/ not found` | Dataset extraction path and `dvc pull`; run the discovery command in section 4 |
+| `mini_dev_sqlite.json not found` | Dataset package/version and extracted directory |
+| `schema.json missing` | Run `dvc pull` or `dvc repro clean` |
+| DVC 401/403 | DagsHub token, username, repository permissions and local remote credentials |
+| `No module named data_engineering or evaluation` | Activate `.venv`, run `pip install -e .` from project root |
+| Embedding download fails | Network/cache issue; retry after checking model access and disk space |
+| Teammate cannot see data | Ensure `dvc push` completed and teammate ran `dvc pull` |
+| Git rejects a large file | Remove raw data from Git tracking; use `dvc add data/raw` and commit the `.dvc` pointer |
 
-| Track | Owner | Files | Next step |
-| --- | --- | --- | --- |
-| A. Data and retrieval | Ines | `src/download_data.py`, `src/ingest.py`, `src/retriever.py`, DVC | set up DVC (section 2.1), check Recall@5 and MRR, improve the table documents if needed |
-| B. Agent and safety | _(to assign)_ | `src/agent.py`, `src/sql_tools.py` | try 3 or 4 questions per database in the app, improve the prompt where the agent fails |
-| C. MCP, interface, evaluation | _(to assign)_ | `mcp_server.py`, `app.py`, `evaluate.py` | run the evaluation, put the results in the report |
+## 9. Final project evidence
 
-Git rule: one branch per change (`git switch -c feat/my-change`), small commits, a pull
-request reviewed by a teammate before merging into `main`.
-
-## Troubleshooting
-
-| Problem | Fix |
-| --- | --- |
-| `ModuleNotFoundError` | activate the venv: `source .venv/Scripts/activate` |
-| `dvc pull` asks for a password or says 401 | redo the three `dvc remote modify ... --local` lines with your DagsHub user and token |
-| Groq "rate limit" errors | the free tier is limited: wait a minute, or run `python evaluate.py --n 10` |
-| The app says a database file is missing | run `dvc pull` |
+The final report/demo should include:
+- data provenance, cleaning decisions, metadata model and glossary;
+- sample retrieved documents with source citations;
+- retrieval benchmark baseline and improved system (if hybrid retrieval is implemented);
+- LangGraph workflow and actual MCP tool calls;
+- SQL safety tests and read-only execution;
+- generation benchmark and error analysis;
+- end-to-end web application and deployment instructions;
+- limitations, reproducibility instructions and dataset attribution.

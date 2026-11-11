@@ -1,19 +1,10 @@
-# Python
-__pycache__/
-*.pyc
-.venv/
-venv/
-
-# Environment secrets
 .env
-
-# Data: versioned with DVC, not Git (DVC adds its own entries to data/.gitignore)
-data/minidev.zip
-data/raw/
-
-# IDE / OS
-.vscode/
-.idea/
-.DS_Store
-Thumbs.db
 vtest/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+node_modules/
+frontend/dist/
+evaluation/results/*.csv
+.dvc/config.local
+docs/
