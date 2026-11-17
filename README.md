@@ -4,7 +4,7 @@ A manager asks a business question in plain language. The system finds the relev
 (RAG), writes SQL, runs it read-only, and answers with a table, a chart, an explanation and its
 sources.
 
-**Team:** Ines Belkahla (A: data and retrieval), Ouissem Oueslati, Sarra Bettaieb
+**Team:** ines-belkahla (A: data and retrieval), weslatiwissem, Sarra-dev
 (B: agent, C: interface).
 **Data:** 3 databases of [BIRD Mini-Dev](https://github.com/bird-bench/mini_dev) (CC BY-SA 4.0):
 `financial`, `formula_1`, `student_club`.
