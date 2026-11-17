@@ -1,185 +1,178 @@
-"""STEP 1 - DATA CLEANING. Owner: Person A.
+"""STEP 1 - Clean the BIRD documentation and turn every table into one document.
 
-Reads   data/raw/**/dev_databases/<db>/{<db>.sqlite, database_description/*.csv}  and  data/glossary/*.md
-Writes  data/processed/schema.json           clean structured schema (tables, columns, keys, descriptions, samples)
-        data/processed/documents.jsonl       one retrieval document per table / column / glossary paragraph
-        data/processed/cleaning_report.json  what was fixed or missing (for the report)
+Run:   python -m data_engineering.processing.clean   (or: dvc repro clean)
+Reads: data/raw/<db>/<db>.sqlite and data/raw/<db>/database_description/*.csv
+Writes data/processed/documents.jsonl      one document per table (the RAG documents)
+       data/processed/schema.json          the cleaned schema, used by data_api.get_schema_text()
+       data/processed/cleaning_report.json what was fixed or is missing
 
-Run: python -m data_engineering.processing.clean
+The database VALUES are never changed: BIRD's reference SQL uses them as stored
+(e.g. 'POPLATEK MESICNE'). Czech values are translated in the documents instead.
 """
 import csv
 import hashlib
+import io
 import json
 import re
 import sqlite3
-from pathlib import Path
 
-from data_engineering import config
+from data_engineering.config import DATABASES, PROCESSED_DIR, RAW_DIR, database_path
 
-CSV_KEYS = ("original_column_name", "column_name", "column_description", "data_format", "value_description")
+# English meaning of the Czech codes stored in the `financial` database
+# (from the documentation of the original PKDD'99 Czech bank dataset).
+CZECH_TERMS = {
+    "POPLATEK MESICNE": "monthly statement",
+    "POPLATEK TYDNE": "weekly statement",
+    "POPLATEK PO OBRATU": "statement after each transaction",
+    "PRIJEM": "credit (money in)",
+    "VYDAJ": "withdrawal (money out)",
+    "VYBER": "cash withdrawal",
+    "VYBER KARTOU": "credit card withdrawal",
+    "VKLAD": "cash deposit",
+    "PREVOD Z UCTU": "collection from another bank",
+    "PREVOD NA UCET": "transfer to another bank",
+    "POJISTNE": "insurance payment",
+    "SLUZBY": "payment for statement",
+    "UROK": "interest credited",
+    "SANKC. UROK": "penalty interest (negative balance)",
+    "SIPO": "household payment",
+    "DUCHOD": "old-age pension",
+    "UVER": "loan payment",
+    "DISPONENT": "authorized user (not the owner)",
+}
+MAX_CATEGORIES = 20  # a text column with at most 20 distinct values is a category
 
 
-# ---------- text helpers ----------
-def clean_text(s) -> str:
-    """Normalise whitespace / odd characters; None -> ''."""
-    if s is None:
-        return ""
-    s = str(s).replace("\u00a0", " ").replace("\ufeff", "").replace("\r", "\n")
-    return re.sub(r"\s+", " ", s).strip()
+def clean_text(text):
+    """Remove extra spaces, line breaks and invisible characters."""
+    text = str(text or "").replace("﻿", "").replace(" ", " ")
+    return re.sub(r"\s+", " ", text).strip()
 
 
-def humanize(name: str) -> str:
-    """'T_Cell_count' / 'birthDate' / 'cdsCode' -> 'cell count' style words."""
-    s = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", name)
-    return re.sub(r"[_\s]+", " ", s).strip().lower()
-
-
-def read_description_csv(path: Path) -> tuple[list[dict], str]:
-    """Return (rows with normalised keys, encoding used). Tries utf-8 then latin-1."""
-    for enc in ("utf-8-sig", "latin-1"):
+def read_csv(path):
+    """BIRD description files use different encodings: try them in order."""
+    data = path.read_bytes()
+    for encoding in ("utf-8-sig", "cp1252", "latin-1"):
         try:
-            with open(path, newline="", encoding=enc) as f:
-                rows = []
-                for r in csv.DictReader(f):
-                    rows.append({(k or "").strip().lower(): clean_text(v) for k, v in r.items()})
-                return rows, enc
+            text = data.decode(encoding)
+            break
         except UnicodeDecodeError:
             continue
-    return [], "unreadable"
+    reader = csv.DictReader(io.StringIO(text))
+    rows = []
+    for row in reader:
+        row = {clean_text(k).lower(): clean_text(v) for k, v in row.items() if k}
+        if row.get("original_column_name"):
+            rows.append(row)
+    return rows
 
 
-# ---------- sqlite helpers ----------
-def _ro(path: Path) -> sqlite3.Connection:
-    c = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
-    c.text_factory = lambda b: b.decode("utf-8", errors="replace")
-    return c
+def categories(conn, table, column):
+    """Distinct values of a text column, or [] if it has too many to be a category."""
+    rows = conn.execute(
+        f'SELECT DISTINCT "{column}" FROM "{table}" WHERE "{column}" IS NOT NULL '
+        f"LIMIT {MAX_CATEGORIES + 1}"
+    ).fetchall()
+    values = [str(r[0]).strip() for r in rows if isinstance(r[0], str) and r[0].strip()]
+    return values if len(values) <= MAX_CATEGORIES else []
 
 
-def _samples(conn, table: str, col: str, n: int, max_chars: int) -> list[str]:
-    try:
-        rows = conn.execute(
-            f'SELECT DISTINCT "{col}" FROM "{table}" WHERE "{col}" IS NOT NULL LIMIT {int(n)}').fetchall()
-    except sqlite3.Error:
-        return []
-    out = []
-    for (v,) in rows:
-        if isinstance(v, bytes):
-            continue
-        t = clean_text(v)
-        out.append(t[:max_chars] + ("..." if len(t) > max_chars else ""))
-    return out
-
-
-# ---------- main cleaning ----------
-def clean_database(db_id: str, p: dict, report: dict) -> dict:
-    db_dir = config.dev_databases_dir() / db_id
-    desc_dir = db_dir / "database_description"
-    csvs = {f.stem.strip().lower(): f for f in desc_dir.glob("*.csv")} if desc_dir.exists() else {}
-    conn = _ro(config.sqlite_path(db_id))
-    tables_out, used_csv = [], set()
+def clean_database(db_id, report):
+    conn = sqlite3.connect(f"file:{database_path(db_id).as_posix()}?mode=ro", uri=True)
+    csv_files = {p.stem.strip().lower(): p for p in (RAW_DIR / db_id / "database_description").glob("*.csv")}
+    tables = []
     names = [r[0] for r in conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
-    for t in names:
-        f = csvs.get(t.strip().lower())
-        rows, enc = ([], None)
-        if f:
-            used_csv.add(f.stem.strip().lower())
-            rows, enc = read_description_csv(f)
-            if enc != "utf-8-sig":
-                report["csv_latin1_fallback"].append(f"{db_id}/{f.name}")
-        else:
-            report["tables_without_csv"].append(f"{db_id}.{t}")
-        by_col = {r.get("original_column_name", "").strip().lower(): r for r in rows}
-        info = list(conn.execute(f'PRAGMA table_info("{t}")'))
-        db_cols = {c[1].strip().lower() for c in info}
-        for orphan in set(by_col) - db_cols - {""}:
-            report["csv_rows_without_column"].append(f"{db_id}.{t}.{orphan}")
-        fks = [{"from": r[3], "to_table": r[2], "to_column": r[4]}
-               for r in conn.execute(f'PRAGMA foreign_key_list("{t}")')]
-        cols = []
-        for _, name, ctype, _, _, pk in info:
-            r = by_col.get(name.strip().lower(), {})
-            human = r.get("column_name", "")
-            desc = r.get("column_description", "")
-            source = "csv"
-            if not desc:
-                source = "auto"
-                desc = human if human and human.lower() != name.lower() else humanize(name)
-                report["auto_descriptions"].append(f"{db_id}.{t}.{name}")
-            vdesc = r.get("value_description", "")
-            cols.append({"name": name, "type": ctype or "", "is_pk": bool(pk),
-                         "human_name": human or humanize(name), "description": desc,
-                         "description_source": source, "value_description": vdesc,
-                         "data_format": r.get("data_format", ""),
-                         "samples": _samples(conn, t, name, p["sample_values"], p["sample_value_max_chars"])})
-        n_rows = conn.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0]
-        tables_out.append({"name": t, "n_rows": n_rows, "source": f"database_description/{f.name}" if f else "sqlite schema",
-                           "primary_key": [c["name"] for c in cols if c["is_pk"]],
-                           "foreign_keys": fks, "columns": cols})
-    for stem in set(csvs) - used_csv:
-        report["csv_without_table"].append(f"{db_id}/{csvs[stem].name}")
+    for table in names:
+        csv_file = csv_files.get(table.lower())
+        described = {r["original_column_name"].lower(): r for r in read_csv(csv_file)} if csv_file else {}
+        if not csv_file:
+            report["tables_without_description"].append(f"{db_id}.{table}")
+
+        columns = []
+        for _, name, col_type, _, _, is_pk in conn.execute(f'PRAGMA table_info("{table}")'):
+            row = described.get(name.lower(), {})
+            description = row.get("column_description") or row.get("column_name") or ""
+            if not description:
+                report["columns_without_description"].append(f"{db_id}.{table}.{name}")
+
+            values = categories(conn, table, name)  # numbers and long free text give []
+            translations = {v: CZECH_TERMS[v] for v in values if v in CZECH_TERMS}
+            if db_id == "financial":
+                for v in values:
+                    if v not in CZECH_TERMS and v.isupper() and len(v) > 3:
+                        report["values_without_translation"].append(f"{db_id}.{table}.{name} = {v}")
+
+            columns.append({
+                "name": name,
+                "type": col_type or "",
+                "primary_key": bool(is_pk),
+                "description": description,
+                "value_description": row.get("value_description", ""),
+                "values": values,
+                "translations": translations,
+            })
+
+        foreign_keys = [{"column": r[3], "ref_table": r[2], "ref_column": r[4]}
+                        for r in conn.execute(f'PRAGMA foreign_key_list("{table}")')]
+        tables.append({
+            "name": table,
+            "rows": conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0],
+            "source": f"{db_id}/database_description/{csv_file.name}" if csv_file else f"{db_id}/{db_id}.sqlite",
+            "columns": columns,
+            "foreign_keys": foreign_keys,
+        })
     conn.close()
-    return {"db_id": db_id, "tables": tables_out}
+    return tables
 
 
-def build_documents(schemas: dict, p: dict) -> list[dict]:
-    docs, vmax = [], p["value_description_max_chars"]
-    for db_id, s in schemas.items():
-        for t in s["tables"]:
-            col_txt = "; ".join(f"{c['name']} ({c['type']}): {c['description']}" for c in t["columns"])
-            fk_txt = "; ".join(f"{f['from']} -> {f['to_table']}.{f['to_column']}" for f in t["foreign_keys"])
-            docs.append({"id": f"{db_id}.{t['name']}",
-                         "text": f"Table {t['name']} in database {db_id} ({t['n_rows']} rows). Columns: {col_txt}."
-                                 + (f" Foreign keys: {fk_txt}." if fk_txt else ""),
-                         "metadata": {"db_id": db_id, "table": t["name"], "column": "", "level": "table",
-                                      "type": "", "is_pk": False, "source": t["source"]}})
-            for c in t["columns"]:
-                ex = f" Examples: {', '.join(c['samples'])}." if c["samples"] else ""
-                vd = f" {c['value_description'][:vmax]}" if c["value_description"] else ""
-                docs.append({"id": f"{db_id}.{t['name']}.{c['name']}",
-                             "text": f"Column {c['name']} ({c['human_name']}) of table {t['name']} in database "
-                                     f"{db_id}, type {c['type']}. {c['description']}.{vd}{ex}",
-                             "metadata": {"db_id": db_id, "table": t["name"], "column": c["name"],
-                                          "level": "column", "type": c["type"], "is_pk": c["is_pk"],
-                                          "source": t["source"]}})
-    # glossary (hand-written business definitions)
-    for f in sorted(config.glossary_dir().glob("*.md")):
-        if f.stem not in schemas:
-            continue
-        paras = [clean_text(x) for x in f.read_text(encoding="utf-8").split("\n\n")]
-        for i, para in enumerate([x for x in paras if x and not x.startswith("#")]):
-            docs.append({"id": f"{f.stem}.glossary.{i}", "text": f"Definition ({f.stem}): {para}",
-                         "metadata": {"db_id": f.stem, "table": "", "column": "", "level": "glossary",
-                                      "type": "", "is_pk": False, "source": f"glossary/{f.name}"}})
-    seen = set()
-    for d in docs:
-        assert d["id"] not in seen, f"duplicate document id {d['id']}"
-        seen.add(d["id"])
-        d["metadata"]["hash"] = hashlib.sha1(d["text"].encode("utf-8")).hexdigest()
-    return docs
+def table_document(db_id, table):
+    """The text that gets embedded, plus the metadata used for filtering and citations."""
+    lines = [f"Table {table['name']} in database {db_id} ({table['rows']} rows).", "Columns:"]
+    for c in table["columns"]:
+        line = f"- {c['name']} ({c['type'] or 'ANY'}{', primary key' if c['primary_key'] else ''})"
+        if c["description"]:
+            line += f": {c['description']}"
+        if c["value_description"]:
+            line += f". {c['value_description'][:300]}"
+        if c["translations"]:
+            line += ". Values: " + ", ".join(f"'{k}' = {v}" for k, v in c["translations"].items())
+        elif c["values"]:
+            line += ". Values: " + ", ".join(f"'{v}'" for v in c["values"][:8])
+        lines.append(line)
+    for fk in table["foreign_keys"]:
+        lines.append(f"Foreign key: {table['name']}.{fk['column']} -> {fk['ref_table']}.{fk['ref_column']}")
+    text = "\n".join(lines)
+    return {
+        "id": f"{db_id}.{table['name']}",
+        "text": text,
+        "metadata": {
+            "db_id": db_id,
+            "table": table["name"],
+            "source": table["source"],
+            "hash": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        },
+    }
 
 
-def run() -> None:
-    p = config.params()["clean"]
-    report = {k: [] for k in ("csv_latin1_fallback", "tables_without_csv", "csv_rows_without_column",
-                              "csv_without_table", "auto_descriptions")}
-    schemas = {db: clean_database(db, p, report) for db in config.list_db_ids()}
-    docs = build_documents(schemas, p)
-    out = config.processed_dir()
-    out.mkdir(parents=True, exist_ok=True)
-    (out / "schema.json").write_text(json.dumps(schemas, indent=1, sort_keys=True, ensure_ascii=False), encoding="utf-8")
-    with open(out / "documents.jsonl", "w", encoding="utf-8") as f:
-        for d in docs:
-            f.write(json.dumps(d, sort_keys=True, ensure_ascii=False) + "\n")
-    n_cols = sum(len(t["columns"]) for s in schemas.values() for t in s["tables"])
-    summary = {"databases": len(schemas), "tables": sum(len(s["tables"]) for s in schemas.values()),
-               "columns": n_cols, "documents": len(docs),
-               **{k: len(v) for k, v in report.items()},
-               "pct_columns_with_csv_description": round(100 * (1 - len(report["auto_descriptions"]) / max(n_cols, 1)), 1)}
-    (out / "cleaning_report.json").write_text(
-        json.dumps({"summary": summary, "details": report}, indent=1, sort_keys=True), encoding="utf-8")
+def main():
+    report = {"tables_without_description": [], "columns_without_description": [],
+              "values_without_translation": []}
+    schema = {db_id: clean_database(db_id, report) for db_id in DATABASES}
+    documents = [table_document(db_id, t) for db_id, tables in schema.items() for t in tables]
+
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    (PROCESSED_DIR / "schema.json").write_text(json.dumps(schema, indent=1, ensure_ascii=False), encoding="utf-8")
+    with open(PROCESSED_DIR / "documents.jsonl", "w", encoding="utf-8") as f:
+        for doc in documents:
+            f.write(json.dumps(doc, ensure_ascii=False) + "\n")
+    report["values_without_translation"] = sorted(set(report["values_without_translation"]))
+    summary = {"databases": len(schema), "documents": len(documents),
+               **{k: len(v) for k, v in report.items()}}
+    (PROCESSED_DIR / "cleaning_report.json").write_text(
+        json.dumps({"summary": summary, "details": report}, indent=1), encoding="utf-8")
     print(json.dumps(summary, indent=1))
 
 
 if __name__ == "__main__":
-    run()
+    main()

@@ -1,0 +1,12 @@
+# Specification v3: Conversational SQL Analyst
+
+1. **Goal.** Managers ask analytical questions about a relational database in plain language and get a table, a chart, an explanation, the SQL used and the sources, without knowing SQL, with a guarantee that data cannot be modified.
+2. **Data.** BIRD Mini-Dev (CC BY-SA 4.0): 500 questions, 11 SQLite databases, `database_description` CSVs. Versioned with DVC on DagsHub.
+3. **Data cleaning (Person A).** Normalise text and encodings, match descriptions to real columns, generate missing descriptions, add sample values, keys and foreign keys, merge hand-written glossary definitions, and produce a cleaning report. Outputs: `schema.json`, `documents.jsonl`, `cleaning_report.json`.
+4. **Retrieval (Person A).** One document per table, column and glossary paragraph with metadata (`db_id, table, column, level, type, is_pk, source, hash`) in ChromaDB; incremental re-indexing; top-k search; database routing; schema context with foreign-key expansion and citations.
+5. **Agent (Person B).** LangGraph: rewrite follow-up, retrieve, generate SQL, validate (single SELECT only), execute read-only with row limit and timeout, repair up to 3 times, refuse unanswerable or modifying requests, explain. Tools exposed through an MCP server: `explain_schema`, `validate_sql`, `run_sql`, `make_chart`.
+6. **API (Person B, data routes Person A).** FastAPI with streaming chat (SSE) and data endpoints (`docs/CONTRACTS.md`).
+7. **Frontend (Person C).** React web app: chat with live agent steps, SQL, table, chart, sources; database picker and auto-detect; schema explorer; data-quality page; Docker Compose delivery.
+8. **Evaluation.** 60 stratified Mini-Dev questions, plus 8 follow-ups and 7 unsafe/unanswerable questions written by the team. Retrieval: Recall@3/5/10, MRR, routing accuracy, context recall. Generation: execution accuracy with and without evidence by difficulty, repair rate, safety (100% blocked), refusal, follow-ups with and without memory. Compare with the BIRD baselines on the dataset card (re-check the numbers, the card was updated in July 2025).
+9. **Deliverables.** Code, DVC pipeline and metrics, evaluation set and results table, running web app, MCP client demo, short report with limitations.
+10. **Risks.** Valid SQL that answers a different question (show SQL and sources); questions that need `evidence` knowledge (glossary, with/without-evidence evaluation); hard benchmark (report by difficulty); memory carrying wrong context (show the interpreted question).

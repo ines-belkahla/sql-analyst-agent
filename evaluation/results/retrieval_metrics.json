@@ -1,0 +1,41 @@
+{
+  "questions": 30,
+  "overall": {
+    "recall@1": 0.431,
+    "precision@1": 0.867,
+    "recall@3": 0.736,
+    "precision@3": 0.544,
+    "recall@5": 0.847,
+    "precision@5": 0.387,
+    "mrr": 0.919
+  },
+  "by_database": {
+    "financial": {
+      "recall@1": 0.417,
+      "precision@1": 1.0,
+      "recall@3": 0.758,
+      "precision@3": 0.633,
+      "recall@5": 0.85,
+      "precision@5": 0.44,
+      "mrr": 1.0
+    },
+    "formula_1": {
+      "recall@1": 0.317,
+      "precision@1": 0.6,
+      "recall@3": 0.633,
+      "precision@3": 0.467,
+      "recall@5": 0.717,
+      "precision@5": 0.32,
+      "mrr": 0.758
+    },
+    "student_club": {
+      "recall@1": 0.558,
+      "precision@1": 1.0,
+      "recall@3": 0.817,
+      "precision@3": 0.533,
+      "recall@5": 0.975,
+      "precision@5": 0.4,
+      "mrr": 1.0
+    }
+  }
+}

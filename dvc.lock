@@ -1,0 +1,74 @@
+schema: '2.0'
+stages:
+  clean:
+    cmd: python -m data_engineering.processing.clean
+    deps:
+    - path: data/raw
+      hash: md5
+      md5: 4897710913dacbe6986d72793e51e9b0.dir
+      size: 96398915
+      nfiles: 33
+    - path: data_engineering/config.py
+      hash: md5
+      md5: a861152de9c91d631c88ca318be5b840
+      size: 1328
+    - path: data_engineering/processing/clean.py
+      hash: md5
+      md5: 27b310954301cd6dc9a5d413ae4f7eb6
+      size: 7718
+    outs:
+    - path: data/processed
+      hash: md5
+      md5: fafa5860e249b68e52e8173f0a762b23.dir
+      size: 94521
+      nfiles: 3
+  build_eval_set:
+    cmd: python -m evaluation.datasets.build_eval_set
+    deps:
+    - path: data/raw
+      hash: md5
+      md5: 4897710913dacbe6986d72793e51e9b0.dir
+      size: 96398915
+      nfiles: 33
+    - path: data_engineering/config.py
+      hash: md5
+      md5: a861152de9c91d631c88ca318be5b840
+      size: 1328
+    - path: evaluation/datasets/build_eval_set.py
+      hash: md5
+      md5: 8587f5488ad1b7e8d0bfc694a637c888
+      size: 2530
+    outs:
+    - path: data/questions/dev.jsonl
+      hash: md5
+      md5: 7216980df87260bea46f9f0943e3a444
+      size: 65241
+    - path: data/questions/eval.jsonl
+      hash: md5
+      md5: f965a24953a9f3b6cbb05aec06f00a5a
+      size: 18434
+  eval_retrieval:
+    cmd: python -m evaluation.retrieval.eval_retrieval
+    deps:
+    - path: data/processed
+      hash: md5
+      md5: fafa5860e249b68e52e8173f0a762b23.dir
+      size: 94521
+      nfiles: 3
+    - path: data/questions/eval.jsonl
+      hash: md5
+      md5: f965a24953a9f3b6cbb05aec06f00a5a
+      size: 18434
+    - path: data_engineering/data_api.py
+      hash: md5
+      md5: 362c459f34f076b35a5d8c2e3a93f4fd
+      size: 3367
+    - path: evaluation/retrieval/eval_retrieval.py
+      hash: md5
+      md5: 442b48a2ed1a6e1b54fbfe872a36aff4
+      size: 1975
+    outs:
+    - path: evaluation/results/retrieval_metrics.json
+      hash: md5
+      md5: 3fea59a6b33c8f3f56a031baee3d4b89
+      size: 868

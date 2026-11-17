@@ -8,4 +8,4 @@ version = "0.1.0"
 requires-python = ">=3.10"
 
 [tool.setuptools.packages.find]
-include = ["data_engineering*", "evaluation*", "agent*"]
+include = ["data_engineering*", "evaluation*"]

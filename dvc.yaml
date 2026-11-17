@@ -1,34 +1,36 @@
-# Reproducible pipeline.  Everything:  dvc repro     One stage:  dvc repro clean
+# DVC pipeline for the data part.  Run everything: dvc repro   One step: dvc repro clean
+# data/raw (our 3 databases) is tracked separately with "dvc add data/raw".
+# Indexing into Qdrant is not a DVC step: Qdrant stores its data in Docker,
+# so each person runs "python -m data_engineering.retrieval.index" (a few seconds).
 stages:
-  build_eval_set:                       # Person A
-    cmd: python -m evaluation.datasets.build_eval_set
-    deps: [data/raw, evaluation/datasets/build_eval_set.py, data_engineering/config.py]
-    params: [eval]
-    outs:
-      - evaluation/data/eval_set.jsonl:
-          cache: false                  # small, stays visible in Git
-
-  clean:                                # Person A  (STEP 1: data cleaning)
+  clean:
     cmd: python -m data_engineering.processing.clean
-    deps: [data/raw, data/glossary, data_engineering/processing/clean.py, data_engineering/config.py]
-    params: [clean]
-    outs: [data/processed]              # schema.json, documents.jsonl, cleaning_report.json
+    deps:
+      - data/raw
+      - data_engineering/processing/clean.py
+      - data_engineering/config.py
+    outs:
+      - data/processed
 
-  index:                                # Person A  (STEP 2: retrieval index)
-    cmd: python -m data_engineering.retrieval.index
-    deps: [data/processed, data_engineering/retrieval/index.py, data_engineering/retrieval/embeddings.py, data_engineering/config.py]
-    params: [embedding]
-    outs: [data/index]
+  build_eval_set:
+    cmd: python -m evaluation.datasets.build_eval_set
+    deps:
+      - data/raw
+      - evaluation/datasets/build_eval_set.py
+      - data_engineering/config.py
+    outs:
+      - data/questions/eval.jsonl:
+          cache: false        # small: kept visible in Git
+      - data/questions/dev.jsonl:
+          cache: false
 
-  eval_retrieval:                       # Person A
+  eval_retrieval:             # needs Qdrant running and indexed
     cmd: python -m evaluation.retrieval.eval_retrieval
-    deps: [data/index, data/processed, evaluation/data/eval_set.jsonl, evaluation/retrieval, data_engineering/retrieval]
-    params: [retrieval]
+    deps:
+      - data/processed
+      - data/questions/eval.jsonl
+      - data_engineering/data_api.py
+      - evaluation/retrieval/eval_retrieval.py
     metrics:
       - evaluation/results/retrieval_metrics.json:
           cache: false
-
-  # eval_generation:                    # Person B adds: EX with/without evidence, repair, safety, refusals
-  #   cmd: python -m evaluation.generation.eval_generation
-  #   deps: [data/index, evaluation/data/eval_set.jsonl, agent]
-  #   metrics: [evaluation/results/generation_metrics.json: {cache: false}]

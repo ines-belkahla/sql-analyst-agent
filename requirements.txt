@@ -1,14 +1,15 @@
-# ===== shared / Person A (data + retrieval) =====
+# data + retrieval stack
 python-dotenv
-pyyaml
 pandas
-sqlglot
-fastapi
-chromadb
+sqlglot                    
+langchain
+langchain-core
+langchain-huggingface
 sentence-transformers
+langchain-qdrant
+qdrant-client
 dvc
 pytest
--e .
+-e .                       # importable data_engineering and evaluation 
 
-# ===== Person B adds below (agent + API) =====  suggested: langgraph langchain langchain-openai "mcp<2" fastapi "uvicorn[standard]" sse-starlette
-# ===== Person C: frontend dependencies live in frontend/package.json (npm), not here =====
+# agent dependencies (langgraph, langchain-groq, mcp, ...)

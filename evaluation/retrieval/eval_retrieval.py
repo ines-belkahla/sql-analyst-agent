@@ -1,41 +1,48 @@
-"""RETRIEVAL BENCHMARK. Owner: Person A.   Run: python -m evaluation.retrieval.eval_retrieval
-Metrics (gold tables come from the reference SQL):
-  given_db   : Recall@3/5/10 and MRR when the database is known
-  routed_db  : same, but the agent must first find the database (also reports routing accuracy)
-  context    : table recall of the final schema context handed to the SQL generator (what B actually uses)
+"""STEP 4 - Retrieval benchmark on the frozen eval questions (Qdrant must be running).
+
+Run: python -m evaluation.retrieval.eval_retrieval   (or: dvc repro eval_retrieval)
+
+For each question, the right tables are the ones its reference SQL uses (`gold_tables`).
+  Recall@k    share of the right tables found in the top k
+  Precision@k share of the top k that are right tables
+  MRR         1 / rank of the first right table (1.0 = always first)
+Writes evaluation/results/retrieval_metrics.json (summary) and retrieval_details.csv.
 """
 import json
-from pathlib import Path
-import pandas as pd
-from data_engineering.retrieval.search import search, rank_tables, route_db
-from data_engineering.retrieval.context import build_schema_context
 
-HERE = Path(__file__).parent
-KS = [3, 5, 10]
+import pandas as pd
+
+from data_engineering.config import RESULTS_DIR
+from data_engineering.data_api import load_questions, search_schema
+
+KS = [1, 3, 5]
 
 
 def main():
-    rows = [json.loads(l) for l in open(HERE.parent / "data" / "eval_set.jsonl", encoding="utf-8")]
-    res = []
-    for r in rows:
-        gold = {t.lower() for t in r["gold_tables"]}
-        for mode in ("given_db", "routed_db"):
-            db = r["db_id"] if mode == "given_db" else route_db(r["question"])
-            ranked = [t.lower() for t in rank_tables(search(r["question"], db, 40))] if db == r["db_id"] else []
-            rec = {f"recall@{k}": len(gold & set(ranked[:k])) / len(gold) for k in KS}
-            mrr = next((1 / (i + 1) for i, t in enumerate(ranked) if t in gold), 0.0)
-            ctx = build_schema_context(r["question"], r["db_id"] if mode == "given_db" else None)
-            ctx_rec = len(gold & {t.lower() for t in ctx.tables}) / len(gold) if ctx.db_id == r["db_id"] else 0.0
-            res.append({"mode": mode, "difficulty": r["difficulty"], "db_correct": int(db == r["db_id"]),
-                        "mrr": mrr, "context_recall": ctx_rec, **rec})
-    df = pd.DataFrame(res)
-    print(df.groupby("mode").mean(numeric_only=True).round(3).T)
-    print(df.groupby(["mode", "difficulty"]).mean(numeric_only=True).round(3))
-    out = HERE.parent / "results"
-    out.mkdir(exist_ok=True)
-    df.to_csv(out / "retrieval_details.csv", index=False)
-    metrics = {f"{mode}.{c}": round(v, 4) for mode, g in df.groupby("mode") for c, v in g.mean(numeric_only=True).items()}
-    (out / "retrieval_metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+    rows = []
+    for q in load_questions("eval"):
+        gold = set(q["gold_tables"])
+        ranked = [hit["table"].lower() for hit in search_schema(q["question"], q["db_id"], k=max(KS))]
+        row = {"question_id": q["question_id"], "db_id": q["db_id"], "difficulty": q["difficulty"],
+               "gold_tables": ";".join(sorted(gold)), "retrieved": ";".join(ranked)}
+        for k in KS:
+            found = len(gold & set(ranked[:k]))
+            row[f"recall@{k}"] = found / len(gold)
+            row[f"precision@{k}"] = found / k
+        row["mrr"] = next((1 / (i + 1) for i, t in enumerate(ranked) if t in gold), 0.0)
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    metric_cols = [c for c in df.columns if "@" in c or c == "mrr"]
+    summary = {
+        "questions": len(df),
+        "overall": df[metric_cols].mean().round(3).to_dict(),
+        "by_database": df.groupby("db_id")[metric_cols].mean().round(3).to_dict("index"),
+    }
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    df.to_csv(RESULTS_DIR / "retrieval_details.csv", index=False)
+    (RESULTS_DIR / "retrieval_metrics.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    print(json.dumps(summary, indent=2))
 
 
 if __name__ == "__main__":

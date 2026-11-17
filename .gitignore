@@ -1,10 +1,17 @@
-.env
+# venvs
 vtest/
+venv/
+.venv/
+
+# safety
+.env
+.dvc/config.local
+
+# data
+data/download/
+evaluation/results/*.csv
+
+# cache
 __pycache__/
 *.egg-info/
 .pytest_cache/
-node_modules/
-frontend/dist/
-evaluation/results/*.csv
-.dvc/config.local
-docs/
