@@ -4,6 +4,7 @@
     get_retriever(db_id, k)       LangChain retriever over one database's documents
     search_schema(question, db)   matching tables with their source (citation) and score
     get_schema_text(db_id)        the full cleaned schema as text (no RAG)
+    get_table_documents(db_id)    {table (lower case): {table, text, source}} read from the documents file
     database_path(db_id)          path of the SQLite file (open it read-only)
     load_questions(split)         "dev" or "eval" questions with their reference SQL
 """
@@ -18,6 +19,7 @@ from data_engineering.config import (
     COLLECTION_NAME,
     DATABASES,
     EMBEDDING_MODEL,
+    FETCH_K,
     PROCESSED_DIR,
     QDRANT_URL,
     QUESTIONS_DIR,
@@ -26,7 +28,7 @@ from data_engineering.config import (
 )
 
 __all__ = ["list_databases", "get_retriever", "search_schema", "get_schema_text",
-           "database_path", "load_questions"]
+           "get_table_documents", "database_path", "load_questions"]
 
 
 # ---------- connections (created once) ----------
@@ -72,15 +74,33 @@ def get_retriever(db_id, k=TOP_K):
     return get_vector_store().as_retriever(search_kwargs={"k": k, "filter": _only(db_id)})
 
 
-def search_schema(question, db_id, k=TOP_K):
-    """[{table, text, source, score}] best first. `source` is the citation."""
+def search_schema(question, db_id, k=TOP_K, rerank=False, fetch_k=FETCH_K,
+                  expand_fk=False, min_links=2, max_extra=3):
+    """[{table, text, source, score, vector_score}] best first. `source` is the citation.
+
+    rerank=False: the k closest tables in Qdrant (vector similarity).
+    rerank=True : take fetch_k candidates from Qdrant, reorder them with a cross-encoder,
+                  keep the best k. `score` is then the reranker score; `vector_score`
+                  is always the Qdrant similarity.
+    expand_fk=True: after that, append the tables that link the retrieved ones (foreign keys).
+                  They come last, with via="fk" and score=None. See retrieval/fk_expand.py.
+    """
     _check(db_id)
-    hits = get_vector_store().similarity_search_with_score(question, k=k, filter=_only(db_id))
-    return [
+    n = max(k, fetch_k) if rerank else k
+    hits = get_vector_store().similarity_search_with_score(question, k=n, filter=_only(db_id))
+    results = [
         {"table": doc.metadata["table"], "text": doc.page_content,
-         "source": doc.metadata["source"], "score": round(score, 4)}
+         "source": doc.metadata["source"], "score": round(score, 4),
+         "vector_score": round(score, 4)}
         for doc, score in hits
     ]
+    if rerank:
+        from data_engineering.retrieval.rerank import rerank_hits  # loaded only when needed
+        results = rerank_hits(question, results, top_n=k)
+    if expand_fk:
+        from data_engineering.retrieval.fk_expand import expand_with_fk  # imported here: avoids a circular import
+        results = results + expand_with_fk(db_id, results, min_links, max_extra)
+    return results
 
 
 def get_schema_text(db_id):
@@ -88,6 +108,15 @@ def get_schema_text(db_id):
     _check(db_id)
     docs = [json.loads(line) for line in open(PROCESSED_DIR / "documents.jsonl", encoding="utf-8")]
     return "\n\n".join(d["text"] for d in docs if d["metadata"]["db_id"] == db_id)
+
+
+def get_table_documents(db_id):
+    """{table name in lower case: {table, text, source}} for one database, read from documents.jsonl."""
+    _check(db_id)
+    docs = [json.loads(line) for line in open(PROCESSED_DIR / "documents.jsonl", encoding="utf-8")]
+    return {d["metadata"]["table"].lower(): {"table": d["metadata"]["table"], "text": d["text"],
+                                             "source": d["metadata"]["source"]}
+            for d in docs if d["metadata"]["db_id"] == db_id}
 
 
 def load_questions(split="dev"):

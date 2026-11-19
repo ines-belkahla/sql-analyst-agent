@@ -25,6 +25,8 @@ EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 # Retrieval and evaluation
 TOP_K = 3              # tables returned per question
+FETCH_K = 10           # candidates taken from Qdrant before reranking
+RERANK_MODEL = "BAAI/bge-reranker-base"   # lighter alternative: "cross-encoder/ms-marco-MiniLM-L-6-v2"
 EVAL_PER_DATABASE = 10  # frozen evaluation questions per database (the rest is dev)
 SEED = 42
 

@@ -18,7 +18,7 @@ python -m data_engineering.retrieval.index     # loads the documents into Qdrant
 | --- | --- |
 | `list_databases()` | `["financial", "formula_1", "student_club"]` |
 | `get_retriever(db_id, k=3)` | a LangChain retriever over that database's table documents |
-| `search_schema(question, db_id, k=3)` | `[{"table", "text", "source", "score"}]`, best first |
+| `search_schema(question, db_id, k=3, rerank=False, expand_fk=False)` | `[{"table", "text", "source", "score"}]`, best first |
 | `get_schema_text(db_id)` | every table of the database as text (no RAG) |
 | `database_path(db_id)` | path of the SQLite file |
 | `load_questions("dev")` | questions + reference SQL to build and test the agent |

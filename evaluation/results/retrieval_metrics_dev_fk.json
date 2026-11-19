@@ -1,0 +1,59 @@
+{
+  "split": "dev",
+  "rerank": false,
+  "fetch_k": null,
+  "fk": true,
+  "min_links": 1,
+  "max_extra": 3,
+  "questions": 116,
+  "overall": {
+    "recall@1": 0.831,
+    "precision@1": 0.577,
+    "tables@1": 3.147,
+    "recall@3": 0.953,
+    "precision@3": 0.354,
+    "tables@3": 5.793,
+    "recall@5": 0.988,
+    "precision@5": 0.279,
+    "tables@5": 7.698,
+    "mrr": 0.851
+  },
+  "by_database": {
+    "financial": {
+      "recall@1": 0.769,
+      "precision@1": 0.708,
+      "tables@1": 2.545,
+      "recall@3": 1.0,
+      "precision@3": 0.412,
+      "tables@3": 5.955,
+      "recall@5": 1.0,
+      "precision@5": 0.317,
+      "tables@5": 7.773,
+      "mrr": 0.932
+    },
+    "formula_1": {
+      "recall@1": 0.826,
+      "precision@1": 0.49,
+      "tables@1": 3.518,
+      "recall@3": 0.912,
+      "precision@3": 0.316,
+      "tables@3": 5.982,
+      "recall@5": 0.975,
+      "precision@5": 0.257,
+      "tables@5": 8.0,
+      "mrr": 0.765
+    },
+    "student_club": {
+      "recall@1": 0.875,
+      "precision@1": 0.629,
+      "tables@1": 2.947,
+      "recall@3": 0.987,
+      "precision@3": 0.377,
+      "tables@3": 5.421,
+      "recall@5": 1.0,
+      "precision@5": 0.289,
+      "tables@5": 7.211,
+      "mrr": 0.93
+    }
+  }
+}
